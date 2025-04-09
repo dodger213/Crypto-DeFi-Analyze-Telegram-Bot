@@ -5,7 +5,7 @@ import re
 from web3 import Web3
 from web3.exceptions import InvalidAddress, ContractLogicError
 
-from config import WEB3_PROVIDER_URI_KEY
+from config import WEB3_PROVIDER_URI
 
 from datetime import datetime, timedelta
 
@@ -22,8 +22,7 @@ from services.notification import (
 )
 
 # Configure web3 connection
-# This would be replaced with your actual blockchain node connection
-w3_eth = Web3(Web3.HTTPProvider("https://mainnet.infura.io/v3/29bb8bd1892e49eb8af5cea9060caa4e"))
+w3_eth = Web3(Web3.HTTPProvider(WEB3_PROVIDER_URI))
 w3_base = Web3(Web3.HTTPProvider('https://mainnet.base.org'))
 w3_bsc = Web3(Web3.HTTPProvider('https://bsc-dataseed.binance.org/'))
 
@@ -62,6 +61,7 @@ async def is_valid_address(address: str) -> bool:
         return False
     
     return Web3.is_address(address)
+
 async def is_valid_token_contract(address: str, chain: str) -> bool:
     if not await is_valid_address(address):
         logging.warning(f"Invalid address format: {address}")
@@ -166,6 +166,45 @@ def check_providers():
     return eth_connected, base_connected, bsc_connected
 
 
+async def get_token_info(token_address: str, chain: str = "eth") -> Optional[Dict[str, Any]]:
+    """Get detailed information about a token"""
+    if not await is_valid_token_contract(token_address, chain):
+        return None
+    
+    try:      
+        # Get the appropriate web3 provider based on chain
+        w3 = get_web3_provider(chain)
+        
+        # ERC20 ABI for basic token information
+        abi = [
+            {"constant": True, "inputs": [], "name": "name", "outputs": [{"name": "", "type": "string"}], "type": "function"},
+            {"constant": True, "inputs": [], "name": "symbol", "outputs": [{"name": "", "type": "string"}], "type": "function"},
+            {"constant": True, "inputs": [], "name": "decimals", "outputs": [{"name": "", "type": "uint8"}], "type": "function"},
+            {"constant": True, "inputs": [], "name": "totalSupply", "outputs": [{"name": "", "type": "uint256"}], "type": "function"}
+        ]
+        
+        # Create contract instance
+        checksum_address = w3.to_checksum_address(token_address)
+        contract = w3.eth.contract(address=checksum_address, abi=abi)
+        
+        # Get basic token information
+        name = contract.functions.name().call()
+        symbol = contract.functions.symbol().call()
+        decimals = contract.functions.decimals().call()
+        total_supply = contract.functions.totalSupply().call() / (10 ** decimals)
+        
+        # Simulate historical data
+        return {
+            "address": token_address,
+            "name": name,
+            "symbol": symbol,
+            "decimals": decimals,
+            "total_supply": total_supply
+        }
+    except Exception as e:
+        logging.error(f"Error getting token info on {chain}: {e}")
+        return None
+
 async def get_recent_transactions(
     wallet_address: str, 
     token_address: Optional[str] = None,
@@ -186,7 +225,7 @@ async def get_recent_transactions(
     
     try:
         # Initialize Web3 connection
-        w3 = Web3(Web3.HTTPProvider(WEB3_PROVIDER_URI_KEY))
+        w3 = Web3(Web3.HTTPProvider(WEB3_PROVIDER_URI))
         
         # Normalize addresses
         wallet_address = w3.to_checksum_address(wallet_address)
@@ -412,3 +451,4 @@ async def monitor_blockchain_events():
             logging.error(f"Error in blockchain monitor: {e}")
             # Sleep before retrying
             await asyncio.sleep(60)
+

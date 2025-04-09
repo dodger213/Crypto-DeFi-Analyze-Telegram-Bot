@@ -1109,7 +1109,6 @@ async def handle_setup_whale_tracking(update: Update, context: ContextTypes.DEFA
         )
 
 
-
 # token analysis handlers
 async def handle_first_buyers(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle first buyers button callback"""
@@ -1418,8 +1417,229 @@ async def handle_chain_selection_callback(update: Update, context: ContextTypes.
     # Set conversation state to expect token address for the specific feature
     context.user_data["expecting"] = feature_info["expecting"]
 
+async def handle_token_analysis_input(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    analysis_type: str,
+    get_data_func,
+    format_response_func,
+    scan_count_type: str,
+    processing_message_text: str,
+    error_message_text: str,
+    no_data_message_text: str
+) -> None:
+    """
+    Generic handler for token analysis inputs
+    
+    Args:
+        update: The update object
+        context: The context object
+        analysis_type: Type of analysis being performed (for logging)
+        get_data_func: Function to get the data (takes token_address and chain)
+        format_response_func: Function to format the response (takes data and token_data)
+        scan_count_type: Type of scan to increment count for
+        processing_message_text: Text to show while processing
+        error_message_text: Text to show on error
+        no_data_message_text: Text to show when no data is found
+    """
+    token_address = update.message.text.strip()
+    selected_chain = context.user_data.get("default_network")
+    
+    # Validate address
+    if not await is_valid_token_contract(token_address, selected_chain):
+        keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="token_analysis")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            f"⚠️ Something went wrong.⚠️ Please provide a valid token contract address for {selected_chain}.",
+            reply_markup=reply_markup
+        )
+        return
+    
+    # Send processing message
+    processing_message = await update.message.reply_text(processing_message_text)
+    
+    try:
+        # Get data
+        token_info = await get_token_info(token_address, selected_chain)
+        data = await get_data_func(token_address, selected_chain)
+        
+        if not data or not token_info:
+            # Add back button when no data is found
+            keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="token_analysis")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await processing_message.edit_text(
+                no_data_message_text,
+                reply_markup=reply_markup
+            )
+            return
+        
+        # Format the response
+        response, keyboard = format_response_func(data, token_info, token_address)
+
+        if analysis_type == "top_holders":
+            keyboard.insert(0,[InlineKeyboardButton("🔔 Track Whale & Top Holder Sells", callback_data=f"setup_whale_tracking_{token_address}")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        success = False
+        try:
+            # Try to edit the current message
+            await processing_message.edit_text(
+                response,
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.HTML
+            )
+            success = True
+        except Exception as e:
+            logging.error(f"Error in handle_{analysis_type}: {e}")
+            # If editing fails, send a new message
+            await update.message.reply_text(
+                response,
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.HTML
+            )
+            success = True
+            # Delete the original message if possible
+            try:
+                await processing_message.delete()
+            except:
+                pass
+        
+        # Only increment scan count if we successfully displayed data
+        if success:
+            # Get the user directly from the message update
+            user_id = update.effective_user.id
+            user = get_user(user_id)
+            if not user:
+                # Create user if not exists
+                user = User(user_id=user_id, username=update.effective_user.username)
+                # Save user to database if needed
+            
+            await increment_scan_count(user_id, scan_count_type)
+    
+    except Exception as e:
+        logging.error(f"Error in handle_expected_input ({analysis_type}): {e}")
+        
+        # Add back button to exception error message
+        keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="token_analysis")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await processing_message.edit_text(
+            error_message_text,
+            reply_markup=reply_markup
+        )
+
 
 # wallet analysis handlers
+async def handle_wallet_analysis_input(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    analysis_type: str,
+    get_data_func,
+    format_response_func,
+    scan_count_type: str,
+    processing_message_text: str,
+    error_message_text: str,
+    no_data_message_text: str,
+) -> None:
+    """
+    Generic handler for wallet analysis inputs
+    
+    Args:
+        update: The update object
+        context: The context object
+        analysis_type: Type of analysis being performed (for logging)
+        get_data_func: Function to get the data (takes wallet_address)
+        format_response_func: Function to format the response (takes data)
+        scan_count_type: Type of scan to increment count for
+        processing_message_text: Text to show while processing
+        error_message_text: Text to show on error
+        no_data_message_text: Text to show when no data is found
+        additional_params: Additional parameters to pass to get_data_func
+    """
+    wallet_address = update.message.text.strip()
+    selected_chain = context.user_data.get("selected_chain", "eth")
+    
+    if not await is_valid_wallet_address(wallet_address, selected_chain):
+        keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="wallet_analysis")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+               
+        await update.message.reply_text(
+            f"⚠️ Something went wrong.⚠️ Please provide a valid wallet address on {selected_chain}.",
+            reply_markup=reply_markup
+        )
+        return
+    
+    # Send processing message
+    processing_message = await update.message.reply_text(processing_message_text)
+    try:
+        # Get data
+        data = await get_data_func(wallet_address, selected_chain)
+        
+        if not data:
+            # Add back button when no data is found
+            keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="wallet_analysis")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await processing_message.edit_text(
+                no_data_message_text,
+                reply_markup=reply_markup
+            )
+            return
+        
+        # Format the response
+        response, keyboard = format_response_func(data, wallet_address)
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        success = False
+        try:
+            # Try to edit the current message
+            await processing_message.edit_text(
+                response,
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.HTML
+            )
+            success = True
+        except Exception as e:
+            logging.error(f"Error in handle_{analysis_type}: {e}")
+            # If editing fails, send a new message
+            await update.message.reply_text(
+                response,
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.HTML
+            )
+            success = True
+            # Delete the original message if possible
+            try:
+                await processing_message.delete()
+            except:
+                pass
+        
+        # Only increment scan count if we successfully displayed data
+        if success:
+            # Get the user directly from the message update
+            user_id = update.effective_user.id
+            user = get_user(user_id)
+            if not user:
+                # Create user if not exists
+                user = User(user_id=user_id, username=update.effective_user.username)
+                # Save user to database if needed
+            
+            await increment_scan_count(user_id, scan_count_type)
+    
+    except Exception as e:
+        logging.error(f"Error in handle_expected_input ({analysis_type}): {e}")
+        
+        # Add back button to exception error message
+        keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="wallet_analysis")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await processing_message.edit_text(
+            error_message_text,
+            reply_markup=reply_markup
+        )
+
 async def handle_wallet_most_profitable_in_period(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle most profitable wallets in period button callback"""
     
@@ -1556,6 +1776,7 @@ async def handle_wallet_analysis_wallet_input(update: Update, context: ContextTy
     
     # Set conversation state to expect wallet address for the specific feature
     context.user_data["expecting"] = feature_info["expecting"]
+
 
 
 async def handle_period_selection_callback(
@@ -2799,7 +3020,6 @@ async def handle_transaction_id_input(update: Update, context: ContextTypes.DEFA
     )
 
 # handle kol wallets 
-
 async def handle_track_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE, wallet_address: str) -> None:
     """Handle track wallet callback"""
     query = update.callback_query
@@ -2840,3 +3060,103 @@ async def handle_track_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"deploys new tokens, or performs other notable actions.",
         parse_mode=ParseMode.MARKDOWN
     )
+
+    
+async def handle_wallet_holding_duration_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle wallet holding duration input"""
+    from utils import handle_wallet_analysis_input
+    from data.database import get_wallet_holding_duration
+    
+    await handle_wallet_analysis_input(
+        update=update,
+        context=context,
+        analysis_type="wallet_holding_duration",
+        get_data_func=get_wallet_holding_duration,
+        format_response_func=format_wallet_holding_duration_response,
+        scan_count_type="wallet_scan",
+        processing_message_text="🔍 Analyzing wallet holding duration... This may take a moment.",
+        error_message_text="❌ An error occurred while analyzing the wallet. Please try again later.",
+        no_data_message_text="❌ Could not find holding duration data for this wallet."
+    )
+
+async def handle_tokens_deployed_wallet_address_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle tokens deployed by wallet input"""
+    from utils import handle_wallet_analysis_input
+    from data.database import get_tokens_deployed_by_wallet
+    
+    await handle_wallet_analysis_input(
+        update=update,
+        context=context,
+        analysis_type="tokens_deployed_by_wallet",
+        get_data_func=get_tokens_deployed_by_wallet,
+        format_response_func=format_tokens_deployed_response,
+        scan_count_type="wallet_scan",
+        processing_message_text="🔍 Finding tokens deployed by this wallet... This may take a moment.",
+        error_message_text="❌ An error occurred while analyzing the wallet. Please try again later.",
+        no_data_message_text="❌ Could not find any tokens deployed by this wallet."
+    )
+
+async def handle_period_selection(
+    update: Update, 
+    context: ContextTypes.DEFAULT_TYPE,
+    feature_info:str, 
+    scan_type: str,
+    callback_prefix: str
+) -> None:
+    """
+    Generic handler for period selection
+    
+    Args:
+        update: The update object
+        context: The context object
+
+        scan_type: Name of the feature for rate limiting
+        title: Title to display in the message
+        callback_prefix: Prefix for callback data
+    """
+    query = update.callback_query
+    user = await check_callback_user(update)
+    
+    # Check if user has reached daily limit
+    has_reached_limit, current_count = await check_rate_limit_service(
+        user.user_id, scan_type, FREE_WALLET_SCANS_DAILY
+    )
+    
+    if has_reached_limit and not user.is_premium:
+        keyboard = [
+            [InlineKeyboardButton("💎 Upgrade to Premium", callback_data="premium_info")],
+            [InlineKeyboardButton("🔙 Back", callback_data="wallet_analysis")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.message.reply_text(
+            f"⚠️ <b>Daily Limit Reached</b>\n\n"
+            f"You’ve already used <b>{current_count}</b> out of your <b>{FREE_WALLET_SCANS_DAILY}</b> free daily wallet scans available for today. 🚫\n\n"
+            f"To unlock unlimited access to powerful wallet analysis features, upgrade to <b>Premium</b> and explore the full potential of on-chain intelligence. 💎\n",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.HTML
+        )
+        return
+    
+    # If user has not reached limit or is premium, show time period options
+    keyboard = [
+        [
+            InlineKeyboardButton("1 Day", callback_data=f"{callback_prefix}_1"),
+            InlineKeyboardButton("7 Days", callback_data=f"{callback_prefix}_7"),
+            InlineKeyboardButton("30 Days", callback_data=f"{callback_prefix}_30")
+        ],
+        [InlineKeyboardButton("🔙 Back", callback_data="wallet_analysis")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Get the selected chain
+    selected_chain = context.user_data.get("selected_chain", "eth")
+    
+    await query.message.reply_text(
+        f"🔍 <b>Analyzing {feature_info} on {selected_chain}</b>\n\n"
+        f"To proceed with a more in-depth analysis, please choose the time period you'd like to examine. "
+        f"This will help us provide insights that are both accurate and relevant to your needs.",
+        reply_markup=reply_markup,
+        parse_mode=ParseMode.HTML
+    )
+
