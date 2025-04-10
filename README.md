@@ -120,7 +120,7 @@ FREE_WALLET_SCANS_DAILY=3
 FREE_RESPONSE_DAILY = 2
 PREMIUM_RESPONSE_DAILY = 10
 
-WEB3_PROVIDER_URI="Your web3 provider uri"
+ETH_PROVIDER_URI="Your web3 provider uri"
 ETHERSCAN_API_KEY="Your ethrescan api key"
 ```
 
