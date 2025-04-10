@@ -5,14 +5,11 @@ import random
 from web3 import Web3
 from web3.exceptions import InvalidAddress, ContractLogicError
 
-from config import WEB3_PROVIDER_URI
+from config import ETH_PROVIDER_URI, BASE_PROVIDER_URI, BSC_PROVIDER_URI
 
 from datetime import datetime, timedelta
 
-from data.database import (
-    get_all_active_tracking_subscriptions,
-    get_token_profitable_wallets,
-)
+from data.database import get_all_active_tracking_subscriptions
 
 from services.notification import (
     send_tracking_notification,
@@ -21,10 +18,12 @@ from services.notification import (
     format_profitable_wallet_notification
 )
 
+from utils import get_token_info
+
 # Configure web3 connection
-w3_eth = Web3(Web3.HTTPProvider(WEB3_PROVIDER_URI))
-w3_base = Web3(Web3.HTTPProvider('https://mainnet.base.org'))
-w3_bsc = Web3(Web3.HTTPProvider('https://bsc-dataseed.binance.org/'))
+w3_eth = Web3(Web3.HTTPProvider(ETH_PROVIDER_URI))
+w3_base = Web3(Web3.HTTPProvider(BASE_PROVIDER_URI))
+w3_bsc = Web3(Web3.HTTPProvider(BSC_PROVIDER_URI))
 
 ERC20_ABI = [
     {
@@ -154,17 +153,6 @@ def get_web3_provider(chain: str):
         logging.warning(f"Unknown chain '{chain}', defaulting to Ethereum")
         return w3_eth
 
-def check_providers():
-    """Check if all blockchain providers are connected"""
-    eth_connected = w3_eth.is_connected()
-    base_connected = w3_base.is_connected()
-    bsc_connected = w3_bsc.is_connected()
-    
-    if not (eth_connected and base_connected and bsc_connected):
-        logging.warning(f"Provider connection status: ETH: {eth_connected}, BASE: {base_connected}, BSC: {bsc_connected}")
-    
-    return eth_connected, base_connected, bsc_connected
-
 
 async def get_token_info(token_address: str, chain: str = "eth") -> Optional[Dict[str, Any]]:
     """Get detailed information about a token"""
@@ -207,6 +195,7 @@ async def get_token_info(token_address: str, chain: str = "eth") -> Optional[Dic
 
 async def get_recent_transactions(
     wallet_address: str, 
+    chain: str = "eth",
     token_address: Optional[str] = None,
     from_time: Optional[datetime] = None
 ) -> List[Dict[str, Any]]:
@@ -225,7 +214,7 @@ async def get_recent_transactions(
     
     try:
         # Initialize Web3 connection
-        w3 = Web3(Web3.HTTPProvider(WEB3_PROVIDER_URI))
+        w3 = get_web3_provider(chain)
         
         # Normalize addresses
         wallet_address = w3.to_checksum_address(wallet_address)
@@ -325,11 +314,6 @@ async def start_blockchain_monitor():
 async def monitor_blockchain_events():
     """Background task to monitor blockchain events and send notifications"""
     logging.info("Blockchain monitor running")
-
-    from utils import get_token_info
-    
-    # Keep track of processed transactions to avoid duplicate notifications
-    processed_txs = set()
     
     while True:
         try:
