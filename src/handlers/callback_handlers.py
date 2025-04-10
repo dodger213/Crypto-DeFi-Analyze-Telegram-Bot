@@ -6,7 +6,7 @@ from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
 
 from config import FREE_TOKEN_SCANS_DAILY, FREE_RESPONSE_DAILY, FREE_WALLET_SCANS_DAILY, PREMIUM_RESPONSE_DAILY
-from data.database import (get_profitable_wallets, get_all_kol_wallets, get_user_tracking_subscriptions, get_user)
+from data.database import ( get_user_tracking_subscriptions, get_user)
 from data.models import User, TrackingSubscription
 from data.database import *
 

@@ -6,7 +6,7 @@ from data.models import User
 from data.database import (
     get_user, save_user, update_user_activity, get_user_scan_count,
     increment_user_scan_count, set_premium_status,
-    cleanup_expired_premium, get_user_counts, set_user_admin_status as db_set_user_admin_status
+    cleanup_expired_premium, get_user_counts,
 )
 
 async def get_or_create_user(user_id: int, username: Optional[str] = None, 
@@ -205,15 +205,6 @@ async def process_referral(referrer_id: int, referred_id: int) -> bool:
         return True
     except Exception as e:
         logging.error(f"Error processing referral from {referrer_id} to {referred_id}: {e}")
-        return False
-
-async def set_user_admin_status(user_id: int, is_admin: bool) -> bool:
-    """Set a user's admin status"""
-    try:
-        db_set_user_admin_status(user_id, is_admin)
-        return True
-    except Exception as e:
-        logging.error(f"Error setting admin status for user {user_id}: {e}")
         return False
 
 async def get_user_count_stats() -> Dict[str, int]:
