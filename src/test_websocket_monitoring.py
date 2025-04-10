@@ -16,7 +16,7 @@ logging.basicConfig(
 # Import the blockchain service functions
 from services.blockchain import (
     monitor_address_transactions,
-    monitor_token_transfers,
+    # monitor_token_transfers,
     get_web3_ws_provider,
     ERC20_ABI
 )
@@ -61,16 +61,16 @@ async def base_transaction_callback(transaction):
     logging.info(f"Status: {transaction.get('status', 'unknown')}")
     logging.info("-" * 50)
 
-async def token_transfer_callback(transaction):
-    logging.info(f"Token Transfer Detected: {transaction['hash']}")
-    logging.info(f"Token: {transaction['token_symbol']} ({transaction['token_address']})")
-    logging.info(f"From: {transaction['from']}")
-    logging.info(f"To: {transaction['to']}")
-    logging.info(f"Amount: {transaction['amount']} {transaction['token_symbol']}")
-    logging.info(f"Is Buy: {transaction['is_buy']}")
-    logging.info(f"Timestamp: {transaction['timestamp']}")
-    logging.info(f"Status: {transaction.get('status', 'unknown')}")
-    logging.info("-" * 50)
+# async def token_transfer_callback(transaction):
+#     logging.info(f"Token Transfer Detected: {transaction['hash']}")
+#     logging.info(f"Token: {transaction['token_symbol']} ({transaction['token_address']})")
+#     logging.info(f"From: {transaction['from']}")
+#     logging.info(f"To: {transaction['to']}")
+#     logging.info(f"Amount: {transaction['amount']} {transaction['token_symbol']}")
+#     logging.info(f"Is Buy: {transaction['is_buy']}")
+#     logging.info(f"Timestamp: {transaction['timestamp']}")
+#     logging.info(f"Status: {transaction.get('status', 'unknown')}")
+#     logging.info("-" * 50)
 
 async def test_websocket_connection(chain):
     """Test if the WebSocket connection is working"""
@@ -103,36 +103,36 @@ async def run_tests():
         logging.info(f"Started monitoring ETH address: {TEST_ETH_ADDRESS}")
         
         # Monitor Ethereum token transfers
-        tasks.append(asyncio.create_task(
-            monitor_token_transfers(TEST_ETH_ADDRESS, "eth", TEST_ETH_TOKEN, token_transfer_callback)
-        ))
-        logging.info(f"Started monitoring token transfers for {TEST_ETH_TOKEN} on ETH")
+        # tasks.append(asyncio.create_task(
+        #     monitor_token_transfers(TEST_ETH_ADDRESS, "eth", TEST_ETH_TOKEN, token_transfer_callback)
+        # ))
+        # logging.info(f"Started monitoring token transfers for {TEST_ETH_TOKEN} on ETH")
     
-    if bsc_connected:
-        # Monitor BSC address
-        tasks.append(asyncio.create_task(
-            monitor_address_transactions(TEST_BSC_ADDRESS, "bsc", bsc_transaction_callback)
-        ))
-        logging.info(f"Started monitoring BSC address: {TEST_BSC_ADDRESS}")
+    # if bsc_connected:
+    #     # Monitor BSC address
+    #     tasks.append(asyncio.create_task(
+    #         monitor_address_transactions(TEST_BSC_ADDRESS, "bsc", bsc_transaction_callback)
+    #     ))
+    #     logging.info(f"Started monitoring BSC address: {TEST_BSC_ADDRESS}")
         
-        # Monitor BSC token transfers
-        tasks.append(asyncio.create_task(
-            monitor_token_transfers(TEST_BSC_ADDRESS, "bsc", TEST_BSC_TOKEN, token_transfer_callback)
-        ))
-        logging.info(f"Started monitoring token transfers for {TEST_BSC_TOKEN} on BSC")
+    #     # Monitor BSC token transfers
+    #     # tasks.append(asyncio.create_task(
+    #     #     monitor_token_transfers(TEST_BSC_ADDRESS, "bsc", TEST_BSC_TOKEN, token_transfer_callback)
+    #     # ))
+    #     # logging.info(f"Started monitoring token transfers for {TEST_BSC_TOKEN} on BSC")
     
-    if base_connected:
-        # Monitor Base address
-        tasks.append(asyncio.create_task(
-            monitor_address_transactions(TEST_BASE_ADDRESS, "base", base_transaction_callback)
-        ))
-        logging.info(f"Started monitoring BASE address: {TEST_BASE_ADDRESS}")
+    # if base_connected:
+    #     # Monitor Base address
+    #     tasks.append(asyncio.create_task(
+    #         monitor_address_transactions(TEST_BASE_ADDRESS, "base", base_transaction_callback)
+    #     ))
+    #     logging.info(f"Started monitoring BASE address: {TEST_BASE_ADDRESS}")
         
         # Monitor Base token transfers
-        tasks.append(asyncio.create_task(
-            monitor_token_transfers(TEST_BASE_ADDRESS, "base", TEST_BASE_TOKEN, token_transfer_callback)
-        ))
-        logging.info(f"Started monitoring token transfers for {TEST_BASE_TOKEN} on BASE")
+        # tasks.append(asyncio.create_task(
+        #     monitor_token_transfers(TEST_BASE_ADDRESS, "base", TEST_BASE_TOKEN, token_transfer_callback)
+        # ))
+        # logging.info(f"Started monitoring token transfers for {TEST_BASE_TOKEN} on BASE")
     
     logging.info("All monitoring tasks started. Waiting for transactions...")
     logging.info("Press Ctrl+C to stop the test.")
@@ -172,11 +172,11 @@ async def run_single_test(address, chain, token_address=None):
     logging.info(f"Started monitoring {chain} address: {address}")
     
     # Monitor token transfers if token_address is provided
-    if token_address:
-        tasks.append(asyncio.create_task(
-            monitor_token_transfers(address, chain, token_address, token_transfer_callback)
-        ))
-        logging.info(f"Started monitoring token transfers for {token_address} on {chain}")
+    # if token_address:
+    #     tasks.append(asyncio.create_task(
+    #         monitor_token_transfers(address, chain, token_address, token_transfer_callback)
+    #     ))
+    #     logging.info(f"Started monitoring token transfers for {token_address} on {chain}")
     
     logging.info("Monitoring started. Waiting for transactions...")
     logging.info("Press Ctrl+C to stop the test.")
