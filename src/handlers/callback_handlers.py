@@ -1836,7 +1836,11 @@ async def handle_period_selection_callback(
         )
         
         if not data:
-            keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="wallet_analysis")]]
+            if get_data_func.__name__ == "get_kol_data_with_name":
+                keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="kol_wallets")]]
+
+            else:
+                keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="wallet_analysis")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await processing_message.edit_text(

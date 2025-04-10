@@ -5,7 +5,7 @@ import random
 from web3 import Web3
 from web3.exceptions import InvalidAddress, ContractLogicError
 
-from config import ETH_PROVIDER_URI, BASE_PROVIDER_URI, BSC_PROVIDER_URI
+from config import ETH_PROVIDER_URI, BASE_PROVIDER_URI, BSC_PROVIDER_URI, ETH_WSS_PROVIDER_URI, BASE_WSS_PROVIDER_URI, BSC_WSS_PROVIDER_URI
 
 from datetime import datetime, timedelta
 
@@ -18,12 +18,14 @@ from services.notification import (
     format_profitable_wallet_notification
 )
 
-from utils import get_token_info
-
 # Configure web3 connection
 w3_eth = Web3(Web3.HTTPProvider(ETH_PROVIDER_URI))
 w3_base = Web3(Web3.HTTPProvider(BASE_PROVIDER_URI))
 w3_bsc = Web3(Web3.HTTPProvider(BSC_PROVIDER_URI))
+
+w3_eth_ws = Web3(Web3.LegacyWebSocketProvider(ETH_WSS_PROVIDER_URI))
+w3_base_ws = Web3(Web3.LegacyWebSocketProvider(BASE_WSS_PROVIDER_URI))
+w3_bsc_ws = Web3(Web3.LegacyWebSocketProvider(BSC_WSS_PROVIDER_URI))
 
 ERC20_ABI = [
     {
@@ -153,6 +155,26 @@ def get_web3_provider(chain: str):
         logging.warning(f"Unknown chain '{chain}', defaulting to Ethereum")
         return w3_eth
 
+def get_web3_ws_provider(chain: str):
+    """
+    Get the appropriate WebSocket Web3 provider for the specified chain
+    
+    Args:
+        chain: The blockchain network (eth, base, bsc)
+    
+    Returns:
+        Web3: The WebSocket Web3 provider for the specified chain
+    """
+    if chain == "eth":
+        return w3_eth_ws
+    elif chain == "base":
+        return w3_base_ws
+    elif chain == "bsc":
+        return w3_bsc_ws
+    else:
+        logging.warning(f"Unknown chain '{chain}', defaulting to Ethereum")
+        return w3_eth_ws
+
 
 async def get_token_info(token_address: str, chain: str = "eth") -> Optional[Dict[str, Any]]:
     """Get detailed information about a token"""
@@ -255,7 +277,8 @@ async def get_recent_transactions(
         
         # Sort transactions by timestamp (newest first)
         transactions.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
-        
+        logging.info(f"transactions: {transactions}")
+
         return transactions
         
     except Exception as e:
@@ -580,6 +603,224 @@ async def monitor_blockchain_events():
             logging.error(f"Error in blockchain monitor: {e}")
             # Sleep before retrying
             await asyncio.sleep(60)
+
+async def monitor_address_transactions(wallet_address: str, chain: str, callback):
+    """
+    Monitor transactions for a specific address in real-time using WebSocket
+    
+    Args:
+        wallet_address: The wallet address to monitor
+        chain: The blockchain network (eth, base, bsc)
+        callback: Async function to call when a new transaction is detected
+    """
+    w3 = get_web3_ws_provider(chain)
+    
+    # Normalize address
+    wallet_address = wallet_address.lower()
+    
+    # Set up event filters
+    pending_filter = w3.eth.filter('pending')
+    
+    # Define handler for new transactions
+    async def handle_new_tx(tx_hash):
+        try:
+            # Get transaction details
+            try:
+                tx = w3.eth.get_transaction(tx_hash)
+                if tx is None:
+                    # Transaction not found, skip processing
+                    return
+            except Exception as e:
+                # Handle transaction not found errors
+                if "not found" in str(e).lower():
+                    # Skip this transaction
+                    return
+                else:
+                    # Log other errors
+                    logging.error(f"Error fetching transaction {tx_hash.hex()}: {e}")
+                    return
+                
+            tx_from = tx.get('from', '').lower()
+            tx_to = tx.get('to', '').lower()
+            
+            if wallet_address not in [tx_from, tx_to]:
+                return
+                
+            # Get block details
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            if tx.blockNumber is not None:
+                try:
+                    block = w3.eth.get_block(tx.blockNumber)
+                    timestamp = datetime.fromtimestamp(block.timestamp).strftime('%Y-%m-%d %H:%M:%S')
+                except Exception as e:
+                    logging.warning(f"Error getting block details: {e}")
+            
+            # Create transaction object
+            transaction = {
+                'hash': tx_hash.hex(),
+                'from': tx_from,
+                'to': tx_to,
+                'value': w3.from_wei(tx.get('value', 0), 'ether'),
+                'timestamp': timestamp,
+                'is_token_transfer': False,
+                'is_contract_creation': tx_to is None,
+                'status': 'pending' if tx.blockNumber is None else 'confirmed'
+            }
+            
+            # Call the callback with the transaction
+            await callback(transaction)
+            
+        except Exception as e:
+            logging.error(f"Error processing transaction {tx_hash}: {e}")
+    
+    # Start monitoring loop
+    while True:
+        try:
+            # Check for new pending transactions
+            new_entries = w3.eth.get_filter_changes(pending_filter.filter_id)
+            
+            # Process each new transaction
+            for entry in new_entries:
+                asyncio.create_task(handle_new_tx(entry))
+            
+            # Sleep briefly to avoid overwhelming the node
+            await asyncio.sleep(2)
+            
+        except Exception as e:
+            logging.error(f"Error in transaction monitoring loop: {e}")
+            # Reconnect WebSocket if needed
+            try:
+                w3 = get_web3_ws_provider(chain)
+                pending_filter = w3.eth.filter('pending')
+            except Exception as reconnect_error:
+                logging.error(f"Failed to reconnect: {reconnect_error}")
+            await asyncio.sleep(5)
+
+
+async def monitor_token_transfers(wallet_address: str, chain: str, token_address: Optional[str], callback):
+    """
+    Monitor token transfers for a specific address in real-time using WebSocket
+    
+    Args:
+        wallet_address: The wallet address to monitor
+        chain: The blockchain network (eth, base, bsc)
+        token_address: Optional token address to filter transfers
+        callback: Async function to call when a new token transfer is detected
+    """
+    w3 = get_web3_ws_provider(chain)
+    
+    # Normalize addresses
+    wallet_address = wallet_address.lower()
+    if token_address:
+        token_address = w3.to_checksum_address(token_address)
+    
+    # ERC20 Transfer event signature
+    transfer_event_signature = w3.keccak(text="Transfer(address,address,uint256)").hex()
+    
+    # Create filter parameters
+    filter_params = {
+        'topics': [transfer_event_signature]
+    }
+    
+    # Add token address filter if provided
+    if token_address:
+        filter_params['address'] = token_address
+    
+    # Create filter
+    event_filter = w3.eth.filter(filter_params)
+    
+    # Start monitoring loop
+    while True:
+        try:
+            # Check for new events
+            new_entries = w3.eth.get_filter_changes(event_filter.filter_id)
+            
+            # Process each new event
+            for log in new_entries:
+                try:
+                    # Extract addresses from topics
+                    from_address = '0x' + log['topics'][1].hex()[-40:]
+                    to_address = '0x' + log['topics'][2].hex()[-40:]
+                    
+                    # Check if this transfer involves our wallet
+                    if wallet_address not in [from_address.lower(), to_address.lower()]:
+                        continue
+                    
+                    # Get transaction details
+                    tx_hash = log.get('transactionHash', '').hex()
+                    
+                    try:
+                        tx = w3.eth.get_transaction(tx_hash)
+                        if tx is None:
+                            # Transaction not found, skip processing
+                            continue
+                    except Exception as e:
+                        # Handle transaction not found errors
+                        if "not found" in str(e).lower():
+                            # Skip this transaction
+                            continue
+                        else:
+                            # Log other errors
+                            logging.error(f"Error fetching transaction {tx_hash}: {e}")
+                            continue
+                    
+                    # Get block details if available
+                    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    if log.get('blockNumber'):
+                        try:
+                            block = w3.eth.get_block(log.blockNumber)
+                            timestamp = datetime.fromtimestamp(block.timestamp).strftime('%Y-%m-%d %H:%M:%S')
+                        except Exception as e:
+                            logging.warning(f"Error getting block details: {e}")
+                    
+                    # Get token details
+                    token_contract_address = log.address
+                    token_contract = w3.eth.contract(address=token_contract_address, abi=ERC20_ABI)
+                    
+                    try:
+                        token_symbol = token_contract.functions.symbol().call()
+                        token_decimals = token_contract.functions.decimals().call()
+                    except Exception as e:
+                        logging.warning(f"Error getting token details: {e}")
+                        token_symbol = "UNKNOWN"
+                        token_decimals = 18
+                    
+                    # Parse token amount
+                    token_amount = int(log['data'], 16) / (10 ** token_decimals)
+                    
+                    # Create transaction object
+                    transaction = {
+                        'hash': tx_hash,
+                        'from': from_address,
+                        'to': to_address,
+                        'value': 0,  # ETH value is 0 for token transfers
+                        'timestamp': timestamp,
+                        'is_token_transfer': True,
+                        'token_address': token_contract_address,
+                        'token_symbol': token_symbol,
+                        'amount': token_amount,
+                        'is_buy': to_address.lower() == wallet_address.lower(),
+                        'status': 'confirmed' if log.get('blockNumber') else 'pending'
+                    }
+                    
+                    # Call the callback with the transaction
+                    await callback(transaction)
+                    
+                except Exception as e:
+                    logging.error(f"Error processing token transfer: {e}")
+            
+            # Sleep briefly to avoid overwhelming the node
+            await asyncio.sleep(2)
+            
+        except Exception as e:
+            logging.error(f"Error in token transfer monitoring loop: {e}")
+            # Reconnect WebSocket if needed
+            try:
+                w3 = get_web3_ws_provider(chain)
+                event_filter = w3.eth.filter(filter_params)
+            except Exception as reconnect_error:
+                logging.error(f"Failed to reconnect: {reconnect_error}")
+            await asyncio.sleep(5)
 
 
 # token_analysis
