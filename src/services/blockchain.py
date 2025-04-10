@@ -1,6 +1,6 @@
 import logging
 import asyncio
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Union
 import random
 from web3 import Web3
 from web3.exceptions import InvalidAddress, ContractLogicError
@@ -204,13 +204,14 @@ async def get_recent_transactions(
     
     Args:
         wallet_address: The wallet address to get transactions for
+        chain: The blockchain network (eth, base, bsc)
         token_address: Optional token address to filter transactions
         from_time: Optional datetime to get transactions after
         
     Returns:
         List of transaction dictionaries
     """
-    logging.info(f"Getting recent transactions for wallet {wallet_address}")
+    logging.info(f"Getting recent transactions for wallet {wallet_address} on {chain}")
     
     try:
         # Initialize Web3 connection
@@ -221,53 +222,197 @@ async def get_recent_transactions(
         if token_address:
             token_address = w3.to_checksum_address(token_address)
         
-        # In a real implementation, you would:
-        # 1. Query blockchain or indexer API for transactions
-        # 2. Filter by token_address if provided
-        # 3. Filter by timestamp if from_time is provided
-        
-        # For now, return mock data
-        mock_transactions = []
-        
-        # Mock a token transfer transaction
-        mock_token_tx = {
-            'hash': f"0x{wallet_address[2:10]}000000000000000000000000",
-            'from': wallet_address,
-            'to': "0x1234567890123456789012345678901234567890",
-            'value': 0,  # ETH value is 0 for token transfers
-            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'is_token_transfer': True,
-            'token_address': token_address or "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",  # USDC if none provided
-            'token_symbol': "USDC",
-            'amount': 1000.0,
-            'value_usd': 1000.0,
-            'is_buy': True
-        }
-        mock_transactions.append(mock_token_tx)
-        
-        # Mock a contract creation transaction
-        mock_contract_tx = {
-            'hash': f"0x{wallet_address[2:10]}111111111111111111111111",
-            'from': wallet_address,
-            'to': None,  # Contract creation has no 'to' address
-            'value': 0,
-            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'is_contract_creation': True,
-            'contract_address': "0x9876543210987654321098765432109876543210",
-            'contract_type': "ERC20"
-        }
-        mock_transactions.append(mock_contract_tx)
-        
-        # Filter by time if needed
+        # Calculate from_block based on from_time if provided
+        from_block = 'latest'
         if from_time:
-            # In a real implementation, you would filter by timestamp
-            pass
+            # Estimate block number based on timestamp
+            # This is an approximation - for Ethereum, blocks are ~13 seconds apart
+            # For BSC, blocks are ~3 seconds apart
+            # For Base, blocks are ~2 seconds apart
+            seconds_ago = (datetime.now() - from_time).total_seconds()
+            if chain == "eth":
+                blocks_ago = int(seconds_ago / 13)
+            elif chain == "bsc":
+                blocks_ago = int(seconds_ago / 3)
+            elif chain == "base":
+                blocks_ago = int(seconds_ago / 2)
+            else:
+                blocks_ago = int(seconds_ago / 13)  # Default to ETH
+                
+            # Get current block number
+            current_block = w3.eth.block_number
+            from_block = max(0, current_block - blocks_ago)
         
-        return mock_transactions
+        transactions = []
+        
+        # Get normal transactions
+        normal_txs = await get_normal_transactions(wallet_address, chain, from_block)
+        transactions.extend(normal_txs)
+        
+        # Get token transfers if token_address is provided or to get all token transfers
+        token_txs = await get_token_transfers(wallet_address, chain, token_address, from_block)
+        transactions.extend(token_txs)
+        
+        # Sort transactions by timestamp (newest first)
+        transactions.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+        
+        return transactions
         
     except Exception as e:
-        logging.error(f"Error getting recent transactions: {e}")
+        logging.error(f"Error getting recent transactions: {e}", exc_info=True)
         return []
+
+async def get_normal_transactions(wallet_address: str, chain: str, from_block: Union[int, str]) -> List[Dict[str, Any]]:
+    """
+    Get normal (ETH/BNB/BASE) transactions for a wallet
+    
+    Args:
+        wallet_address: The wallet address
+        chain: The blockchain network
+        from_block: Starting block number
+        
+    Returns:
+        List of transaction dictionaries
+    """
+    w3 = get_web3_provider(chain)
+    
+    # Create filter for transactions sent from the wallet
+    from_filter = w3.eth.filter({
+        'fromBlock': from_block,
+        'toBlock': 'latest',
+        'address': wallet_address
+    })
+    
+    # Create filter for transactions sent to the wallet
+    to_filter = w3.eth.filter({
+        'fromBlock': from_block,
+        'toBlock': 'latest',
+        'address': wallet_address
+    })
+    
+    # Get transactions
+    from_entries = w3.eth.get_filter_logs(from_filter.filter_id)
+    to_entries = w3.eth.get_filter_logs(to_filter.filter_id)
+    
+    # Process transactions
+    transactions = []
+    
+    for entry in from_entries + to_entries:
+        tx_hash = entry.get('transactionHash', '').hex()
+        
+        # Skip if we've already processed this transaction
+        if any(tx.get('hash') == tx_hash for tx in transactions):
+            continue
+            
+        # Get full transaction details
+        tx = w3.eth.get_transaction(tx_hash)
+        receipt = w3.eth.get_transaction_receipt(tx_hash)
+        block = w3.eth.get_block(tx.blockNumber)
+        
+        # Create transaction object
+        transaction = {
+            'hash': tx_hash,
+            'from': tx['from'],
+            'to': tx.get('to'),
+            'value': w3.from_wei(tx.get('value', 0), 'ether'),
+            'timestamp': datetime.fromtimestamp(block.timestamp).strftime('%Y-%m-%d %H:%M:%S'),
+            'is_token_transfer': False,
+            'is_contract_creation': tx.get('to') is None
+        }
+        
+        # If this is a contract creation, add the contract address
+        if transaction['is_contract_creation'] and receipt.get('contractAddress'):
+            transaction['contract_address'] = receipt.contractAddress
+            transaction['contract_type'] = 'Unknown'  # Would need further analysis to determine type
+        
+        transactions.append(transaction)
+    
+    return transactions
+
+async def get_token_transfers(wallet_address: str, chain: str, token_address: Optional[str] = None, from_block: Union[int, str] = 'latest') -> List[Dict[str, Any]]:
+    """
+    Get ERC20 token transfers for a wallet
+    
+    Args:
+        wallet_address: The wallet address
+        chain: The blockchain network
+        token_address: Optional token address to filter transfers
+        from_block: Starting block number
+        
+    Returns:
+        List of transaction dictionaries
+    """
+    w3 = get_web3_provider(chain)
+    
+    # ERC20 Transfer event signature
+    transfer_event_signature = w3.keccak(text="Transfer(address,address,uint256)").hex()
+    
+    # Create filter parameters
+    filter_params = {
+        'fromBlock': from_block,
+        'toBlock': 'latest',
+        'topics': [transfer_event_signature]
+    }
+    
+    # Add token address filter if provided
+    if token_address:
+        filter_params['address'] = token_address
+    
+    # Create filter
+    event_filter = w3.eth.filter(filter_params)
+    
+    # Get logs
+    logs = w3.eth.get_filter_logs(event_filter.filter_id)
+    
+    # Process logs
+    transactions = []
+    
+    for log in logs:
+        # Check if this transfer involves our wallet
+        from_address = '0x' + log['topics'][1].hex()[-40:]
+        to_address = '0x' + log['topics'][2].hex()[-40:]
+        
+        if wallet_address.lower() not in [from_address.lower(), to_address.lower()]:
+            continue
+        
+        # Get transaction details
+        tx_hash = log.get('transactionHash', '').hex()
+        tx = w3.eth.get_transaction(tx_hash)
+        block = w3.eth.get_block(log.blockNumber)
+        
+        # Get token details
+        token_contract_address = log.address
+        token_contract = w3.eth.contract(address=token_contract_address, abi=ERC20_ABI)
+        
+        try:
+            token_symbol = token_contract.functions.symbol().call()
+            token_decimals = token_contract.functions.decimals().call()
+        except Exception as e:
+            logging.warning(f"Error getting token details: {e}")
+            token_symbol = "UNKNOWN"
+            token_decimals = 18
+        
+        # Parse token amount
+        token_amount = int(log['data'], 16) / (10 ** token_decimals)
+        
+        # Create transaction object
+        transaction = {
+            'hash': tx_hash,
+            'from': from_address,
+            'to': to_address,
+            'value': 0,  # ETH value is 0 for token transfers
+            'timestamp': datetime.fromtimestamp(block.timestamp).strftime('%Y-%m-%d %H:%M:%S'),
+            'is_token_transfer': True,
+            'token_address': token_contract_address,
+            'token_symbol': token_symbol,
+            'amount': token_amount,
+            'is_buy': to_address.lower() == wallet_address.lower()
+        }
+        
+        transactions.append(transaction)
+    
+    return transactions
+
 
 def is_token_transfer(tx: Dict[str, Any]) -> bool:
     """
